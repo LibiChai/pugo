@@ -1,56 +1,67 @@
 package command
 
 import (
-	"github.com/Unknwon/com"
+	"net/http"
+
 	"github.com/codegangsta/cli"
 	"github.com/go-xiaohei/pugo/app/builder"
 	"github.com/go-xiaohei/pugo/app/server"
 	"gopkg.in/inconshreveable/log15.v2"
 )
 
-var (
-	// Server is command of 'server'
-	Server = cli.Command{
-		Name:  "server",
-		Usage: "server static files",
+// Server returns command serve files
+func Server(opt *builder.Option) cli.Command {
+	return cli.Command{
+		Name:     "server",
+		Usage:    "build source and server static files",
+		HideHelp: true,
 		Flags: []cli.Flag{
-			buildSourceFlag,
-			buildDestFlag,
-			buildThemeFlag,
+			destFlag,
+			themeFlag,
 			addrFlag,
-			serveStaticFlag,
 			debugFlag,
 		},
-		Before: Before,
-		Action: serv,
+		Action: serveSite(opt),
+		Before: setDebugMode,
 	}
+}
 
-	s *server.Server
-)
-
-func serv(c *cli.Context) {
-	if c.Bool("static") {
-		ctx := newContext(c, false)
-		builder.Read(ctx)
-
-		dstDir := ctx.DstDir()
-		if !com.IsDir(dstDir) {
-			log15.Crit("Server|Dest|'%s' is not directory", dstDir)
+func serveSite(opt *builder.Option) func(ctx *cli.Context) {
+	return func(ctx *cli.Context) {
+		if ctx.Bool("debug") {
+			go http.ListenAndServe("0.0.0.0:6060", nil)
 		}
-		log15.Info("Server|Static|%s", dstDir)
-		s := server.New(dstDir)
-		s.SetPrefix(ctx.Source.Meta.Path)
-		s.Run(c.String("addr"))
-		return
+
+		// set target dir
+		if targetDir := ctx.String("dest"); targetDir != "" {
+			opt.TargetDir = targetDir
+		}
+		// set allowEditMd
+		allowEditMd := true
+		if edit := ctx.String("edit"); edit != "" {
+			if(edit == "false"){
+				allowEditMd = false
+			}
+
+		}
+		// set
+		if opt.TargetDir == "template" || opt.TargetDir == "source" {
+			log15.Crit("Builder.Fail", "error", "destination directory should not be 'template' or 'source'")
+		}
+
+		s := server.New(opt.TargetDir,opt.SrcDir,".",allowEditMd)
+		opt.After(func(b *builder.Builder, ctx *builder.Context) error {
+			s.SetPrefix(ctx.Meta.Base)
+			log15.Debug("Server.Prefix." + ctx.Meta.Base)
+			return nil
+		})
+
+		// run server in goroutine
+		go func() {
+			addr := ctx.String("addr")
+			s.Run(addr)
+		}()
+		// run buildSite to build
+		buildSite(opt, true)(ctx)
 	}
-	builder.After(func(ctx *builder.Context) {
-		if s == nil {
-			s = server.New(ctx.DstDir())
-			go s.Run(c.String("addr"))
-		}
-		if ctx.Source != nil && ctx.Source.Meta != nil {
-			s.SetPrefix(ctx.Source.Meta.Path)
-		}
-	})
-	build(newContext(c, true), true)
 }
